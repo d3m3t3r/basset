@@ -9,23 +9,23 @@
 #include <linux/limits.h>
 
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <ostream>
 #include <string>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 using std::cerr;
 using std::cout;
+using std::function;
 using std::ifstream;
 using std::make_unique;
 using std::ofstream;
 using std::ostream;
 using std::string;
 using std::to_string;
-using std::unordered_set;
 using std::vector;
 using std::literals::string_literals::operator""s;
 
@@ -150,7 +150,11 @@ void Regex::report(ssize_t errcode) const {
 
 class CompilationDatabase : ofstream {
 public:
-  template <typename... Args> explicit CompilationDatabase(Args &&...);
+  using IsSourceFileFunc = function<bool(const string &)>;
+
+  template <typename... Args>
+  explicit CompilationDatabase(const IsSourceFileFunc &is_source_file,
+                               Args &&...);
   CompilationDatabase(const CompilationDatabase &) = delete;
   CompilationDatabase(CompilationDatabase &&) = delete;
   CompilationDatabase &operator=(const CompilationDatabase &) = delete;
@@ -160,13 +164,14 @@ public:
   void add(const string &directory, const vector<string> &command);
 
 private:
-  [[nodiscard]] static bool is_source_file(const string &argument);
+  const IsSourceFileFunc is_source_file;
   bool first{true};
 };
 
 template <typename... Args>
-CompilationDatabase::CompilationDatabase(Args &&... args)
-    : ofstream(std::forward<Args>(args)...) {
+CompilationDatabase::CompilationDatabase(const IsSourceFileFunc &is_source_file,
+                                         Args &&...args)
+    : ofstream(std::forward<Args>(args)...), is_source_file(is_source_file) {
   *this << '[';
 }
 
@@ -220,36 +225,34 @@ void CompilationDatabase::add(const string &directory,
 
 CompilationDatabase::~CompilationDatabase() { *this << "\n]\n"; }
 
-bool CompilationDatabase::is_source_file(const string &argument) {
-  // file extensions associated with C, C++, Objective-C, Objective-C++
-  // https://github.com/github/linguist/blob/master/lib/linguist/languages.yml
-  static const unordered_set<string> extensions{
-      "c"s,    "cats"s, "h"s,   "idc"s, "cpp"s, "c++"s, "cc"s,  "cp"s,
-      "cppm"s, "cxx"s,  "h++"s, "hh"s,  "hpp"s, "hxx"s, "inc"s, "inl"s,
-      "ino"s,  "ipp"s,  "ixx"s, "re"s,  "tcc"s, "tpp"s, "m"s,   "mm"s};
-
-  auto dot = argument.find_last_of('.');
-
-  if (dot == string::npos) {
-    return false;
-  }
-
-  auto extension = argument.substr(dot + 1);
-
-  return extensions.count(extension) != 0;
-}
-
 int main(int argc, char *argv[]) {
   using token = char;
 
   const string progname{*argv++};
 
-  auto usage = [progname](ostream &stream) {
-    stream << progname << " [options] -- ...\n";
-  };
-
   bool verbose{false};
   string output{"compile_commands.json"};
+
+  string compiler_re{
+      R"REGEX(([^-]+-)*(c(c|\+\+)|(g(cc|\+\+)|clang(\+\+)?)(-[0-9]+(\.[0-9]+){0,2})?)$)REGEX"};
+
+   // file extensions associated with C, C++, Objective-C, Objective-C++
+   // https://github.com/github/linguist/blob/master/lib/linguist/languages.yml
+  string source_re{
+      R"REGEX(\.(c|cats|h|idc|cpp|c++|cc|cp|cppm|cxx|h++|hh|hpp|hxx|inc|inl|ino|ipp|ixx|re|tcc|tpp|m|mm)$)REGEX"};
+
+  auto usage = [=](ostream &os) {
+    os << "Usage: " << progname << " [OPTIONS] -- BUILD-COMMAND...\n"
+          "Options:\n"
+          "  --help                 This help.\n"
+          "  --verbose              Increase verbosity.\n"
+          "  --output <file>        Output file.\n"
+          "                         (default: " << output << ")\n"
+          "  --compiler-re <regex>  Regex to identify compiler commands.\n"
+          "                         (default: " << compiler_re << ")\n"
+          "  --source-re <regex>    Regex to identify source files.\n"
+          "                         (default: " << source_re << ")\n";
+  };
 
   while (*argv != nullptr) {
     if (*argv == "--"s) {
@@ -272,9 +275,23 @@ int main(int argc, char *argv[]) {
       }
 
       output = *argv;
+    } else if (*argv == "--compiler-re"s) {
+      if (*++argv == nullptr) {
+        cerr << "--compiler-re requires a value\n";
+        return -1;
+      }
+
+      compiler_re = *argv;
+    } else if (*argv == "--source-re"s) {
+      if (*++argv == nullptr) {
+        cerr << "--source-re requires a value\n";
+        return -1;
+      }
+
+      source_re = *argv;
     } else {
-      cerr << "unsupported option: " << *argv << '\n';
-      usage(cerr);
+      cerr << "unsupported option: " << *argv << '\n'
+           << "Try '" << progname << " --help' for more information\n";
       return -1;
     }
 
@@ -307,10 +324,11 @@ int main(int argc, char *argv[]) {
     // signal to the child that everything is set up
     pipe << token{};
 
-    Regex compiler(
-        R"REGEX(([^-]+-)*(c(c|\+\+)|(g(cc|\+\+)|clang(\+\+)?)(-[0-9]+(\.[0-9]+){0,2})?)$)REGEX");
+    Regex compiler(compiler_re.c_str());
+    Regex source(source_re.c_str());
 
-    CompilationDatabase cdb(output);
+    CompilationDatabase cdb(
+        [&source](const string &arg) { return source.match(arg); }, output);
 
     if (!cdb) {
       cerr << "cannot open '" << output << "'\n";
