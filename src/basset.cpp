@@ -237,8 +237,8 @@ int main(int argc, char *argv[]) {
   string compiler_re{
       R"REGEX(([^-]+-)*(c(c|\+\+)|(g(cc|\+\+)|clang(\+\+)?)(-[0-9]+(\.[0-9]+){0,2})?)$)REGEX"};
 
-   // file extensions associated with C, C++, Objective-C, Objective-C++
-   // https://github.com/github/linguist/blob/master/lib/linguist/languages.yml
+  // file extensions associated with C, C++, Objective-C, Objective-C++
+  // https://github.com/github/linguist/blob/master/lib/linguist/languages.yml
   string source_re{
       R"REGEX(\.(c|cats|h|idc|cpp|c++|cc|cp|cppm|cxx|h++|hh|hpp|hxx|inc|inl|ino|ipp|ixx|re|tcc|tpp|m|mm)$)REGEX"};
 
